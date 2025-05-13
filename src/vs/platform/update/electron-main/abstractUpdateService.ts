@@ -105,6 +105,8 @@ export abstract class AbstractUpdateService implements IUpdateService {
 
 		this.setState(State.Idle(this.getUpdateType()));
 
+		setTimeout(() => this.ensureUpdatePrerequisite(), 30 * 1000);
+
 		if (updateMode === 'manual') {
 			this.logService.info('update#ctor - manual checks only; automatic updates are disabled by user preference');
 			return;
@@ -227,6 +229,10 @@ export abstract class AbstractUpdateService implements IUpdateService {
 	}
 
 	protected doQuitAndInstall(): void {
+		// noop
+	}
+
+	protected async ensureUpdatePrerequisite(): Promise<void> {
 		// noop
 	}
 

@@ -17,6 +17,14 @@ import { IRequestService } from '../../request/common/request.js';
 import { ITelemetryService } from '../../telemetry/common/telemetry.js';
 import { IUpdate, State, StateType, UpdateType } from '../common/update.js';
 import { AbstractUpdateService, createUpdateURL, UpdateErrorClassification } from './abstractUpdateService.js';
+import { IDialogMainService } from '../../dialogs/electron-main/dialogMainService.js';
+import { IApplicationStorageMainService } from '../../storage/electron-main/storageMainService.js';
+import { StorageScope, StorageTarget } from '../../storage/common/storage.js';
+import { localize } from '../../../nls.js';
+import { toErrorMessage } from '../../../base/common/errorMessage.js';
+import { massageMessageBoxOptions } from '../../dialogs/common/dialogs.js';
+
+const MOVE_TO_APPLICATIONS_FOLDER_CHOICE_KEY = 'application.moveToApplicationsFolder';
 
 export class DarwinUpdateService extends AbstractUpdateService implements IRelaunchHandler {
 
@@ -34,7 +42,9 @@ export class DarwinUpdateService extends AbstractUpdateService implements IRelau
 		@IEnvironmentMainService environmentMainService: IEnvironmentMainService,
 		@IRequestService requestService: IRequestService,
 		@ILogService logService: ILogService,
-		@IProductService productService: IProductService
+		@IProductService productService: IProductService,
+		@IDialogMainService private readonly dialogMainService: IDialogMainService,
+		@IApplicationStorageMainService private readonly applicationStorageMainService: IApplicationStorageMainService
 	) {
 		super(lifecycleMainService, configurationService, environmentMainService, requestService, logService, productService);
 
@@ -101,6 +111,53 @@ export class DarwinUpdateService extends AbstractUpdateService implements IRelau
 		const url = explicit ? this.url : `${this.url}?bg=true`;
 		electron.autoUpdater.setFeedURL({ url });
 		electron.autoUpdater.checkForUpdates();
+	}
+
+	protected override async ensureUpdatePrerequisite(): Promise<void> {
+		if (!electron.app.isInApplicationsFolder()) {
+			let allowed = this.applicationStorageMainService.getBoolean(`${MOVE_TO_APPLICATIONS_FOLDER_CHOICE_KEY}`, StorageScope.APPLICATION);
+			if (allowed === undefined) {
+				const { response, checkboxChecked } = await this.dialogMainService.showMessageBox({
+					type: 'info',
+					buttons: [
+						localize({ key: 'move', comment: ['&& denotes a mnemonic'] }, "&&Move to Applications folder"),
+						localize({ key: 'cancel', comment: ['&& denotes a mnemonic'] }, "&&Cancel")
+					],
+					message: localize('moveToApplicationsFolderWarning', "{0} works best when run from the Applications folder.", this.productService.nameLong),
+					checkboxLabel: localize('remember', "Do not ask again"),
+					cancelId: 1
+				});
+
+				allowed = response === 0;
+				if (allowed && checkboxChecked) {
+					this.applicationStorageMainService.store(`${MOVE_TO_APPLICATIONS_FOLDER_CHOICE_KEY}`, allowed, StorageScope.APPLICATION, StorageTarget.MACHINE);
+				}
+			}
+
+			if (allowed) {
+				try {
+					electron.app.moveToApplicationsFolder({
+						conflictHandler: conflictType => {
+							if (conflictType === 'exists') {
+								const response = electron.dialog.showMessageBoxSync(massageMessageBoxOptions({
+									type: 'warning',
+									buttons: [
+										localize({ key: 'continue', comment: ['&& denotes a mnemonic'] }, "&&Continue"),
+										localize({ key: 'cancel', comment: ['&& denotes a mnemonic'] }, "&&Cancel")
+									],
+									message: localize('applicationAlreadyExists', "Another copy of {0} already exists inside the Applications folder which will be replaced, would you like to continue ?", this.productService.nameLong),
+									cancelId: 1
+								}, this.productService).options);
+								return (response === 0);
+							}
+							return false;
+						}
+					});
+				} catch (error) {
+					this.logService.trace(`update#moveToApplicationsFolder: failed with ${toErrorMessage(error)}`);
+				}
+			}
+		}
 	}
 
 	private onUpdateAvailable(): void {
